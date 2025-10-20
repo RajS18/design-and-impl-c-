@@ -1,0 +1,174 @@
+#include <iostream>
+#include <utility>
+#include <type_traits>
+
+// =====================================================
+// Base GCObject
+// =====================================================
+class GCObject {
+protected:
+    int ref_count = 0;
+
+public:
+    virtual ~GCObject() = default;
+
+    void incRef() noexcept { ++ref_count; }
+
+    void decRef() noexcept {
+        if (--ref_count == 0) {
+            destroy();
+        }
+    }
+
+protected:
+    // Polymorphic cleanup
+    virtual void destroy() noexcept = 0;
+
+public:
+    // Polymorphic allocation interface
+    template <typename T, typename... Args>
+    static T* allocate(Args&&... args) {
+        static_assert(std::is_base_of_v<GCObject, T>,
+                      "T must derive from GCObject");
+        return T::allocate_impl(std::forward<Args>(args)...);
+    }
+};
+
+// =====================================================
+// GCSingleObject — Single object allocation
+// =====================================================
+class GCSingleObject : public GCObject {
+protected:
+    void destroy() noexcept override {
+        delete this;
+    }
+
+public:
+    template <typename T, typename... Args>
+    static T* allocate_impl(Args&&... args) {
+        static_assert(std::is_base_of_v<GCSingleObject, T>,
+                      "T must derive from GCSingleObject");
+        return new T(std::forward<Args>(args)...);
+    }
+};
+
+// =====================================================
+// GCMultiObject — Multi-object allocation
+// =====================================================
+class GCMultiObject : public GCObject {
+protected:
+    void destroy() noexcept override {
+        delete[] this;
+    }
+
+public:
+    template <typename T>
+    static T* allocate_impl(size_t count) {
+        static_assert(std::is_base_of_v<GCMultiObject, T>,
+                      "T must derive from GCMultiObject");
+        return new T[count];
+    }
+};
+
+// =====================================================
+// Ref<T> Smart Pointer
+// =====================================================
+template <typename T>
+class Ref {
+    static_assert(std::is_base_of_v<GCObject, T>,
+                  "T must derive from GCObject");
+
+    T* ptr = nullptr;
+
+public:
+    Ref() = default;
+
+    explicit Ref(T* p) : ptr(p) {
+        if (ptr) ptr->incRef();
+    }
+
+    Ref(const Ref& other) : ptr(other.ptr) {
+        if (ptr) ptr->incRef();
+    }
+
+    Ref(Ref&& other) noexcept : ptr(other.ptr) {
+        other.ptr = nullptr;
+    }
+
+    Ref& operator=(const Ref& other) {
+        if (this == &other) return *this;
+        if (ptr) ptr->decRef();
+        ptr = other.ptr;
+        if (ptr) ptr->incRef();
+        return *this;
+    }
+
+    Ref& operator=(Ref&& other) noexcept {
+        if (this == &other) return *this;
+        if (ptr) ptr->decRef();
+        ptr = other.ptr;
+        other.ptr = nullptr;
+        return *this;
+    }
+
+    ~Ref() {
+        if (ptr) ptr->decRef();
+    }
+
+    T* operator->() const { return ptr; }
+    T& operator*() const { return *ptr; }
+    T* get() const { return ptr; }
+    explicit operator bool() const { return ptr != nullptr; }
+};
+
+// =====================================================
+// Example User Classes
+// =====================================================
+class MyObject : public GCSingleObject {
+public:
+    int x;
+
+    MyObject(int v) : x(v) {
+        std::cout << "MyObject(" << x << ") constructed\n";
+    }
+
+    ~MyObject() {
+        std::cout << "MyObject(" << x << ") destroyed\n";
+    }
+};
+
+class MyArray : public GCMultiObject {
+public:
+    int data;
+    MyArray() : data(0) {
+        std::cout << "MyArray element constructed\n";
+    }
+    ~MyArray() {
+        std::cout << "MyArray element destroyed\n";
+    }
+};
+
+// =====================================================
+// Example Usage
+// =====================================================
+int main() {
+    std::cout << "=== Single Object Example ===\n";
+    {
+        MyObject* obj_ptr = GCObject::allocate<MyObject>(42);
+        Ref<MyObject> obj(obj_ptr);
+
+        std::cout << "Value: " << obj->x << "\n";
+    } // obj_ref destructor → decRef() → RC=0 → delete this
+
+    std::cout << "\n=== Multi Object Example ===\n";
+    {
+        MyArray* arr_ptr = GCObject::allocate<MyArray>(3);
+        Ref<MyArray> arr(arr_ptr);
+        arr.get()[0].data = 10;
+        arr.get()[1].data = 20;
+        std::cout << "arr[0]=" << arr.get()[0].data
+                  << ", arr[1]=" << arr.get()[1].data << "\n";
+    } // delete[] this
+
+    std::cout << "\n=== End ===\n";
+}
