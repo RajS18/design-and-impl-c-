@@ -1,0 +1,15 @@
+=== Single Object Example ===
+MyObject(42) constructed
+Value: 42
+MyObject(42) destroyed
+
+=== Multi Object Example ===
+MyArray element constructed
+MyArray element constructed
+MyArray element constructed
+arr[0]=10, arr[1]=20
+MyArray element destroyed
+MyArray element destroyed
+MyArray element destroyed
+
+=== End ===
